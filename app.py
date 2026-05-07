@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import streamlit as st
 from openai import AzureOpenAI
 from dotenv import load_dotenv
@@ -48,6 +49,20 @@ Respond ONLY with valid JSON in this schema:
   "body": "email body with proper greeting and sign-off"
 }"""
 
+# ---------- Sample incidents ----------
+SAMPLES = {
+    "💻 IT": "The wifi keeps dying every 20 mins and my whole team can't work. Third time this week, nobody is responding from IT.",
+    "👥 HR": "My manager has been making inappropriate comments about my appearance in team meetings for the past two weeks. I feel uncomfortable but afraid to speak up.",
+    "🏛️ Civic": "Huge pothole on MG Road near the bus stop, already saw two bikes skid yesterday. Been there for over a month, no action from municipality.",
+}
+
+# ---------- PII Anonymizer ----------
+def anonymize(text: str) -> str:
+    text = re.sub(r"[\w\.-]+@[\w\.-]+\.\w+", "[EMAIL]", text)
+    text = re.sub(r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}\b", "[PHONE]", text)
+    text = re.sub(r"\b(?:Mr|Mrs|Ms|Dr|Prof)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?", "[PERSON]", text)
+    return text
+
 
 def analyze_incident(user_text: str) -> dict:
     response = client.chat.completions.create(
@@ -95,10 +110,33 @@ st.set_page_config(page_title="AI Incident Reporter", page_icon="🚨", layout="
 st.title("🚨 AI Incident Reporter")
 st.caption("Turn messy complaints into structured, prioritized reports — and ready-to-send escalation emails.")
 
+# Sidebar
+with st.sidebar:
+    st.header("⚙️ Options")
+    anonymize_toggle = st.toggle(
+        "🔒 Anonymize PII",
+        value=False,
+        help="Strips names, emails, phone numbers before AI processing.",
+    )
+    st.caption("Powered by Azure OpenAI")
+    st.divider()
+    st.markdown("**Built for Caliber 2026**")
+
+# Sample buttons
+st.markdown("**Try a sample:**")
+cols = st.columns(len(SAMPLES))
+for i, (label, text) in enumerate(SAMPLES.items()):
+    if cols[i].button(label, use_container_width=True):
+        st.session_state["input_text"] = text
+        st.session_state.pop("report", None)
+        st.session_state.pop("email", None)
+        st.rerun()
+
 user_text = st.text_area(
-    "Describe the incident in your own words:",
+    "Or describe the incident in your own words:",
+    value=st.session_state.get("input_text", ""),
     height=150,
-    placeholder="e.g. The wifi keeps dying every 20 mins and my whole team can't work. Third time this week, nobody is responding...",
+    placeholder="e.g. The wifi keeps dying every 20 mins and my whole team can't work...",
 )
 
 col_a, col_b = st.columns([1, 5])
@@ -107,20 +145,26 @@ with col_a:
         if not user_text.strip():
             st.warning("Please describe the incident first.")
         else:
+            processed = anonymize(user_text) if anonymize_toggle else user_text
             with st.spinner("Analyzing..."):
                 try:
-                    report = analyze_incident(user_text)
+                    report = analyze_incident(processed)
                     st.session_state["report"] = report
-                    # Reset email if re-analyzing
+                    st.session_state["processed_text"] = processed
                     st.session_state.pop("email", None)
                 except Exception as e:
                     st.error(f"Error: {e}")
 
 with col_b:
-    if st.button("🗑️ Clear", use_container_width=False):
-        st.session_state.pop("report", None)
-        st.session_state.pop("email", None)
+    if st.button("🗑️ Clear"):
+        for k in ["report", "email", "input_text", "processed_text"]:
+            st.session_state.pop(k, None)
         st.rerun()
+
+# Show anonymized text if toggle was on
+if anonymize_toggle and "processed_text" in st.session_state and "report" in st.session_state:
+    with st.expander("🔒 View anonymized input sent to AI"):
+        st.code(st.session_state["processed_text"])
 
 # ---------- Render report ----------
 if "report" in st.session_state:
